@@ -1,34 +1,34 @@
-<?php 
-  
+<?php
 // 入力を取得
-$input = readline('入力してください: '); 
+$input = readline('入力してください: ');
 
 // 入力のビット数を取得
 $input_bit_count = strlen($input) * 8;
 
 // inputをバイナリに変換
-$binary_input= '';
+$binary_input = '';
 for ($i = 0; $i < strlen($input); $i++) {
     $binary_input .= str_pad(base_convert(ord($input[$i]), 10, 2), 8, '0', STR_PAD_LEFT);
 }
 
-// Part 1: Pre-processing
+// Pre-processing
 $pre_processing_512_bits = preProcessing($binary_input, $input_bit_count);
 
-// ここまでOK
-// Part 4: Chunk loop
+// Chunk loop
 $w = chunkLoop($pre_processing_512_bits);
 
-
-// Part 5: Compression loop
+// Compression loop
 $response = compressionLoop($w);
 
-/*
 // 16進数に変換
-$hexadecimal_response = base_convert($response, 2, 16);
+// base_convert()の上限はCPU依存の32bitまたは64bitであり、128bitだとオーバーフローするため
+// 分割して変換する
+$hexadecimal_response = binaryToHex($response);
 
 echo 'SHA-256: ' . $hexadecimal_response . "\n";
-*/
+
+
+
 
 function preProcessing(string $input, int $input_bit_count) {
     // 末尾に1を追加
@@ -43,22 +43,24 @@ function preProcessing(string $input, int $input_bit_count) {
 }
 
 function chunkLoop(string $pre_processing_512_bits) {
-    // 末尾に0を追加し2048ビットにする
-    $pre_processing_2048_bits = $pre_processing_512_bits . str_repeat('0', 2048 - 512);
+    $w = [];
     // 32ビットずつに分割
-    $w = str_split($pre_processing_2048_bits, 32);
-    for ($i = 16; $i < 64; $i++) {
-        $s0 = xorOperation(rightRotate($w[$i - 15], 7), rightRotate($w[$i - 15], 18), rightShift($w[$i - 15], 3));
-        $s1 = xorOperation(rightRotate($w[$i - 2], 17), rightRotate($w[$i - 2], 19), rightShift($w[$i - 2], 10));
-        $w[$i] = $w[$i - 16] & $s0 & $w[$i - 7] & $s1 & '100000000000000000000000000000000';
-        // wを0埋めする
-        $w[$i] = str_pad($w[$i], 32, '0', STR_PAD_LEFT);
+    for ($i = 0; $i < 16; $i++) {
+        $w[$i] = substr($pre_processing_512_bits, $i * 32, 32);
     }
+    for ($i = 16; $i < 64; $i++) {
+        $s0 = rightRotate($w[$i - 15], 7) ^ rightRotate($w[$i - 15], 18) ^ rightShift($w[$i - 15], 3);
+        $s1 = rightRotate($w[$i - 2], 17) ^ rightRotate($w[$i - 2], 19) ^ rightShift($w[$i - 2], 10);
+
+        $w[$i] = addOperation($w[$i - 16], $s0, $w[$i - 7], $s1);
+    }
+
     return $w;
 }
 
-function compressionLoop(array $w) : string {
-    // 初めの素数2, 3, 5, 7, 11, 13, 17, 19の平方根の少数部の最初の32ビット用意
+function compressionLoop(array $w): string
+{
+    // 初めの素数2, 3, 5, 7, 11, 13, 17, 19の平方根の少数部の最初の32ビットを用意
     $h0 = '01101010000010011110011001100111';
     $h1 = '10111011011001111010111010000101';
     $h2 = '00111100011011101111001101110010';
@@ -68,7 +70,7 @@ function compressionLoop(array $w) : string {
     $h6 = '00011111100000111101100110101011';
     $h7 = '01011011111000001100110100011001';
 
-    // 初めの素数64個の立方根の整数部の最初の32ビット用意
+    // 初めの素数64個の立方根の整数部の最初の32ビットを用意
     $k_hexadecimal_arrays = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -83,6 +85,9 @@ function compressionLoop(array $w) : string {
     foreach ($k_hexadecimal_arrays as $k_hexadecimal) {
         $k_binary_arrays[] = str_pad(base_convert($k_hexadecimal, 10, 2), 32, '0', STR_PAD_LEFT);
     }
+
+    // 変数a~hをh0~h7で初期化し用意
+    // 64回のループの中で、最終的なハッシュ値で用いる8つの変数を更新する
     $a = $h0;
     $b = $h1;
     $c = $h2;
@@ -92,16 +97,15 @@ function compressionLoop(array $w) : string {
     $g = $h6;
     $h = $h7;
 
-    for ($i = 0; $i < 1; $i++) {
-        $s1 = xorOperation(rightRotate($e, 6), rightRotate($e, 11), rightRotate($e, 25));
-        echo 's1: ' . $s1 . "\n";
-        $ch = xorOperation($e, $f & $g, notOperation($e), $h);
-        echo 'ch: ' . $ch . "\n";
-        $temp1 = addOperation($h, $s1, $ch, $k_binary_arrays[$i], $w[$i]);
-        echo 'temp1: ' . $temp1 . "\n";
-        $s0 = xorOperation(rightRotate($a, 2), rightRotate($a, 13), rightRotate($a, 22));
-        $maj = xorOperation(addOperation($a, $b), addOperation($a, $c), addOperation($b, $c));
-        $temp2 = addOperation($s0, $maj);
+    for ($i = 0; $i < 64; $i++) {
+        $S1 = rightRotate($e, 6) ^ rightRotate($e, 11) ^ rightRotate($e, 25);
+        $ch = ($e & $f) ^ ((~$e) & $g);
+        $temp1 = addOperation($h, $S1, $ch, $k_binary_arrays[$i], $w[$i]);
+
+        $S0 = rightRotate($a, 2) ^ rightRotate($a, 13) ^ rightRotate($a, 22);
+        $maj = ($a & $b) ^ ($a & $c) ^ ($b & $c);
+        $temp2 = addOperation($S0, $maj);
+
         $h = $g;
         $g = $f;
         $f = $e;
@@ -126,64 +130,36 @@ function compressionLoop(array $w) : string {
     return $response;
 }
 
-function leftRotate($input, $shift) {
-    $shift = $shift % strlen($input);
-    return substr($input, $shift) . substr($input, 0, $shift);
-}
-
-function rightRotate($input, $shift) {
-    $shift = $shift % strlen($input);
+function rightRotate($input, $shift)
+{
     return substr($input, -$shift) . substr($input, 0, -$shift);
 }
 
-function rightShift($input, $shift) {
+function rightShift($input, $shift)
+{
     return str_repeat('0', $shift) . substr($input, 0, -$shift);
 }
 
-function xorOperation(...$inputs) {
-    $response = $inputs[0];
-    for ($i = 1; $i < count($inputs); $i++) {
-        $response = decbin(bindec($response) ^ bindec($inputs[$i]));
+/*
+* ビット加算（32ビットまでを用いる)
+*/
+function addOperation(...$inputs)
+{
+    $sum = 0;
+    foreach ($inputs as $input) {
+        $sum += bindec(str_pad($input, 32, '0', STR_PAD_LEFT));
     }
+    $sum &= 0xFFFFFFFF; // 11111111111111111111111111111111
 
-    // 0埋め
-    $response = str_pad($response, 32, '0', STR_PAD_LEFT);
-
-    return $response;
+    return str_pad(decbin($sum), 32, '0', STR_PAD_LEFT);
 }
 
-function addOperation(...$inputs) {
-    /*
-
-    $response = 0;
-    for ($i = 0; $i < count($inputs); $i++) {
-        if ($inputs[$i] > 0xFFFFFFFF) {
-            $inputs[$i] = number_format($inputs[$i], 0, '', ''); // 指数表記を防ぐ
-        }
-        $response += bindec($inputs[$i]);
+function binaryToHex(string $binary): string {
+    $hex = '';
+    for ($i = 0; $i < strlen($binary); $i += 4) {
+        $chunk = substr($binary, $i, 4);
+        $hex .= base_convert($chunk, 2, 16);
     }
-    $response = $response % 0x100000000;
-    $response = str_pad(decbin($response), 32, '0', STR_PAD_LEFT);
-    echo 'response: ' . $response . "\n";
-    */
-    $response = bindec($inputs[0]);
-    for ($i = 1; $i < count($inputs); $i++) {
-        $num = $response + bindec($inputs[$i]);
-        if ($num > 0xFFFFFFFF) {
-            echo 'num: ' . $num . "\n";
-            $num = number_format($num, 0, '', ''); // 指数表記を防ぐ
-            $response = $num;
-        } else {
-            $response = $num;
-        }
-    }
-    // 2進数に変換(floatの場合はdecbinできないため、一度10進数に変換)
-    return $response;
+    return $hex;
 }
-
-function notOperation($input) {
-    return decbin(~bindec($input));
-}
-
-?> 
-
+?>
